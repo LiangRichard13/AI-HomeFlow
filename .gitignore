@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+__pycache__/
+*.py[cod]
+.Python
+.venv/
+venv/
+env/
+
+# Build / Next.js
+.next/
+out/
+dist/
+build/
+
+# Env & secrets
+.env
+.env.local
+.env.*.local
+*.pem
+
+# IDE & OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Logs & debug
+*.log
+npm-debug.log*
+
+# Python
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+
+# Vector / local DB (if added later)
+chroma_data/
+*.sqlite3
