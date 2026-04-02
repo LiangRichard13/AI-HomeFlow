@@ -21,6 +21,3 @@ torch
 Pillow
 simplejson
 sortedcontainers
-
-# 前端
-streamlit
