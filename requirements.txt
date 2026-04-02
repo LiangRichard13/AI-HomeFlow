@@ -6,7 +6,7 @@ langchain-chroma>=0.2.0
 # Streamlit 原型 UI
 streamlit>=1.40.0
 
-# 数据处理
+# 模型管理
 modelscope
 
 # API 服务

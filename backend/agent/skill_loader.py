@@ -29,11 +29,19 @@ def format_session_digest(session: SessionState) -> str:
         f"- 决策池总价 user_list_total: {session.user_list_total:.2f} 元",
     ]
     if session.user_list:
-        lines.append("- User-List 明细（id / category / price）:")
+        lines.append("- User-List 明细（id / name / category / price / style_tags / material / dimensions）:")
         for it in session.user_list:
+            dims = it.dimensions
+            dim_text = f"{dims.w:.0f}×{dims.d:.0f}×{dims.h:.0f} cm"
+            style_text = "、".join(it.style_tags) if it.style_tags else "—"
             lines.append(
-                f"  - {it.id} | category={it.category.value} | price={it.price:.2f}"
+                "  - "
+                f"{it.id} | name={it.name or '（无名称）'} | category={it.category.value} "
+                f"| price={it.price:.2f} | style_tags={style_text} "
+                f"| material={it.material or '—'} | dimensions={dim_text}"
             )
+            if it.description:
+                lines.append(f"    description={it.description}")
     else:
         lines.append("- User-List: （空）")
     if session.workflow_phase == "finished":

@@ -51,13 +51,13 @@ def _get_vectorstore() -> "Chroma | None":
         return _vectorstore
     if _vectorstore_failed:
         return None
-    from langchain_chroma import Chroma
-    from rag.gte_embeddings import COLLECTION_NAME, DEFAULT_CHROMA_DIR
-
-    if not DEFAULT_CHROMA_DIR.is_dir():
-        _vectorstore_failed = True
-        return None
     try:
+        from langchain_chroma import Chroma
+        from rag.gte_embeddings import COLLECTION_NAME, DEFAULT_CHROMA_DIR
+
+        if not DEFAULT_CHROMA_DIR.is_dir():
+            _vectorstore_failed = True
+            return None
         emb = _get_embeddings()
         _vectorstore = Chroma(
             persist_directory=str(DEFAULT_CHROMA_DIR),
@@ -66,6 +66,7 @@ def _get_vectorstore() -> "Chroma | None":
         )
         return _vectorstore
     except Exception:
+        logger.exception("初始化向量库失败，带 description 的搜索将降级为按 id 排序。")
         _vectorstore_failed = True
         return None
 
@@ -73,9 +74,9 @@ def _get_vectorstore() -> "Chroma | None":
 def warmup_rag() -> None:
     """进程启动时预加载 GTE 并连接 Chroma，避免首个带描述的搜索长时间阻塞。"""
     global _vectorstore_failed
-    from rag.gte_embeddings import DEFAULT_CHROMA_DIR
 
     try:
+        from rag.gte_embeddings import DEFAULT_CHROMA_DIR
         _get_embeddings().embed_query("warmup")
         logger.info("GTE 嵌入模型已加载并完成一次预热推理。")
     except Exception:

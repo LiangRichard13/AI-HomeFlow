@@ -11,8 +11,10 @@ DEFAULT_MAX_TOOL_ROUNDS = 8
 
 # Chat / Agent 配置
 DEFAULT_CHAT_API_KEY = (os.getenv("CHAT_API_KEY") or "").strip()
-DEFAULT_CHAT_BASE_URL = "https://api.siliconflow.cn/v1"
-DEFAULT_CHAT_MODEL = "Pro/MiniMaxAI/MiniMax-M2.5"
+# DEFAULT_CHAT_BASE_URL = "https://api.siliconflow.cn/v1"
+# DEFAULT_CHAT_MODEL = "Pro/MiniMaxAI/MiniMax-M2.5"
+DEFAULT_CHAT_BASE_URL = "https://api.deepseek.com"
+DEFAULT_CHAT_MODEL = "deepseek-chat"
 
 # 图生图配置
 DEFAULT_ARK_IMAGE_API_KEY = (os.getenv("ARK_API_KEY") or "").strip()

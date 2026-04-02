@@ -33,7 +33,7 @@ logging.getLogger("modelscope").setLevel(logging.ERROR)
 logging.getLogger("transformers").setLevel(logging.ERROR)
 
 import streamlit as st
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 
 from agent.config import (
     DEFAULT_ARK_IMAGE_API_KEY,
@@ -47,7 +47,24 @@ from agent.runner import (
     run_chat_turn,
 )
 from core.state import SessionState
-from services.furniture_api import warmup_rag
+from services.furniture_api import load_catalog, warmup_rag
+
+_STYLE_PREF_WIDGET_KEY = "homeflow_style_pref_field"
+
+
+@st.cache_data
+def _catalog_style_tag_hints() -> tuple[str, str]:
+    """(排序后的唯一标签列表「、」连接, 适合 placeholder 的短示例)。"""
+    items = load_catalog()
+    tags: set[str] = set()
+    for it in items:
+        for t in it.style_tags or []:
+            s = (t or "").strip()
+            if s:
+                tags.add(s)
+    ordered = sorted(tags)
+    short_sample = "、".join(ordered[:8]) if ordered else "北欧、现代、极简"
+    return short_sample
 
 SUPPORTED_UPLOAD_TYPES = ["jpg", "jpeg", "png", "webp", "bmp", "tiff", "tif", "gif"]
 
@@ -138,7 +155,7 @@ def _run_image_generation(
     if not uploads:
         raise ValueError("请先上传至少 1 张房间或参考图片。")
     if not session.user_list:
-        raise ValueError("请先将至少 1 件家具加入 User-List，再进入图生图阶段。")
+        raise ValueError("请先将至少 1 件家具加入 User-List，再进入效果图生成阶段。")
 
     room_id = st.session_state.render_room_image_id
     room_entry = next((item for item in uploads if item["id"] == room_id), None)
@@ -170,18 +187,15 @@ def _render_show_item(it, idx: int) -> None:
     name_display = it.name or it.id
 
     with st.container(border=True):
-        col_img, col_info = st.columns([1, 2])
-        with col_img:
-            img = _resolve_image(it.image_url)
-            if img:
-                st.image(img, width="stretch")
-        with col_info:
-            st.markdown(f"**{name_display}**")
-            st.caption(f"`{it.id}` · `{cat}` · **¥{it.price:,.0f}**")
-            st.caption(f"📐 {dim_str}　🪵 {it.material or '—'}")
-            st.caption(f"🎨 {colors_str}　🏷️ {style_str}")
-            if it.description:
-                st.caption(it.description)
+        img = _resolve_image(it.image_url)
+        if img:
+            st.image(img, width=180)
+        st.markdown(f"**{name_display}**")
+        st.caption(f"`{it.id}` · `{cat}` · **¥{it.price:,.0f}**")
+        st.caption(f"📐 {dim_str}　🪵 {it.material or '—'}")
+        st.caption(f"🎨 {colors_str}　🏷️ {style_str}")
+        if it.description:
+            st.caption(it.description)
 
 
 def _render_user_item(it, idx: int) -> None:
@@ -207,19 +221,23 @@ def main() -> None:
     _warmup_rag_once()
     _init_session_state()
     session: SessionState = st.session_state.homeflow_session
-    session.style_preference = None
 
     st.title("AI-HomeFlow")
     st.caption("先通过对话筛选家具，再上传房间图片并在确认清单后生成效果图。")
 
     with st.sidebar:
         st.header("当前配置")
-        st.caption(f"对话模型：`{DEFAULT_CHAT_MODEL}`")
-        st.caption(f"图像模型：`{DEFAULT_ARK_IMAGE_MODEL}`")
+        st.markdown(
+            f'<div style="font-size:1.05rem;line-height:1.45;">'
+            f'<p style="margin:0 0 0.35em 0;">对话模型：<code>{DEFAULT_CHAT_MODEL}</code></p>'
+            f'<p style="margin:0;">图像模型：<code>{DEFAULT_ARK_IMAGE_MODEL}</code></p>'
+            f"</div>",
+            unsafe_allow_html=True,
+        )
         if not DEFAULT_CHAT_API_KEY:
             st.warning("未检测到 `OPENAI_API_KEY`，当前无法进行对话。")
         if not DEFAULT_ARK_IMAGE_API_KEY:
-            st.warning("未检测到 `ARK_API_KEY`，当前无法进行图生图。")
+            st.warning("未检测到 `ARK_API_KEY`，当前无法进行效果图生成。")
         st.divider()
         if st.button("重置会话", type="secondary"):
             st.session_state.homeflow_session = SessionState()
@@ -230,7 +248,21 @@ def main() -> None:
             st.session_state.generated_room_image_url = None
             st.session_state.generated_room_image_error = None
             st.session_state.generated_room_image_inputs = []
+            if _STYLE_PREF_WIDGET_KEY in st.session_state:
+                del st.session_state[_STYLE_PREF_WIDGET_KEY]
             st.rerun()
+
+        style_tags_short = _catalog_style_tag_hints()
+        if _STYLE_PREF_WIDGET_KEY not in st.session_state:
+            st.session_state[_STYLE_PREF_WIDGET_KEY] = session.style_preference or ""
+        pref_raw = st.text_input(
+            "风格偏好（style_preference）",
+            key=_STYLE_PREF_WIDGET_KEY,
+            placeholder=f"可输入自由描述…",
+            help="保存到当前会话，Agent 每轮系统提示中可见，用于与推荐风格对齐。",
+        )
+        session.style_preference = pref_raw.strip() or None
+        st.caption(f"当前目录家具中出现过的风格标签（可作参考）：{style_tags_short}")
 
     col_chat, col_lists = st.columns([1.1, 0.9], gap="large")
 
@@ -240,7 +272,7 @@ def main() -> None:
             "上传房间/参考图片",
             type=SUPPORTED_UPLOAD_TYPES,
             accept_multiple_files=True,
-            help="建议至少上传 1 张房间照片；这些图片会在确认清单完成后与 User-List 家具图一起用于图生图。",
+            help="建议至少上传 1 张房间照片；这些图片会在确认清单完成后与 User-List 家具图一起用于效果图生成。",
         )
         _sync_render_uploads(uploaded_files)
 
@@ -267,15 +299,7 @@ def main() -> None:
                     tag = "房间图" if item["id"] == st.session_state.render_room_image_id else "参考图"
                     st.caption(f"{tag} · {item['name']}")
         else:
-            st.caption("可在此提前上传房间图或参考图，系统会缓存到 Finish 阶段再调用图生图。")
-
-        chat_container = st.container(height=420, border=True)
-        with chat_container:
-            if not st.session_state.ui_chat_log:
-                st.caption("在下方输入需求，Agent 会把合适的家具加入候选池。")
-            for role, text in st.session_state.ui_chat_log:
-                with st.chat_message(role):
-                    st.markdown(text)
+            st.caption("可在此提前上传房间图或参考图，系统会缓存到 Finish 阶段再调用效果图生成。")
 
         user_input = st.chat_input(
             "描述需求，Agent 检索后将推荐追加到候选池",
@@ -286,19 +310,49 @@ def main() -> None:
 
         if user_input and DEFAULT_CHAT_API_KEY:
             st.session_state.ui_chat_log.append(("user", user_input))
-            with st.spinner("Agent 思考中…"):
-                try:
-                    reply, tail = run_chat_turn(
-                        session,
-                        list(st.session_state.lc_messages),
-                        user_input,
-                    )
-                    st.session_state.lc_messages.extend(tail)
-                except Exception as e:
-                    reply = f"调用失败：{type(e).__name__}: {e}"
-            st.session_state.ui_chat_log.append(("assistant", reply or "（无文本回复）"))
-            st.rerun()
-        elif user_input and not DEFAULT_CHAT_API_KEY:
+
+        chat_container = st.container(height=800, border=True)
+        with chat_container:
+            if not st.session_state.ui_chat_log:
+                st.caption("在下方输入需求，Agent 会把合适的家具加入候选池。")
+            for role, text in st.session_state.ui_chat_log:
+                with st.chat_message(role):
+                    st.markdown(text)
+
+            if user_input and DEFAULT_CHAT_API_KEY:
+                tail_to_extend: list[BaseMessage] = []
+                reply = ""
+                with st.chat_message("assistant"):
+                    stream_ph = st.empty()
+                    buf = ""
+
+                    def _on_stream(kind: str, data) -> None:
+                        nonlocal buf
+                        if kind == "delta":
+                            buf += data
+                            stream_ph.markdown(buf)
+                        elif kind == "status":
+                            buf += f"\n\n*{data}*\n\n"
+                            stream_ph.markdown(buf)
+
+                    try:
+                        reply, tail_to_extend = run_chat_turn(
+                            session,
+                            list(st.session_state.lc_messages),
+                            user_input,
+                            stream=True,
+                            on_stream_event=_on_stream,
+                        )
+                    except Exception as e:
+                        reply = f"调用失败：{type(e).__name__}: {e}"
+                        stream_ph.markdown(reply)
+                    else:
+                        stream_ph.markdown(reply or buf or "（无文本回复）")
+                    st.session_state.lc_messages.extend(tail_to_extend)
+                st.session_state.ui_chat_log.append(("assistant", reply or buf or "（无文本回复）"))
+                st.rerun()
+
+        if user_input and not DEFAULT_CHAT_API_KEY:
             st.warning("请先在环境变量中配置 `OPENAI_API_KEY`。")
 
     with col_lists:
@@ -313,7 +367,11 @@ def main() -> None:
             for idx, it in enumerate(session.show_list):
                 col_cb, col_card = st.columns([0.05, 0.95])
                 with col_cb:
-                    checked = st.checkbox("", key=f"pick_{it.id}_{idx}", label_visibility="collapsed")
+                    checked = st.checkbox(
+                        "选择该家具",
+                        key=f"pick_{it.id}_{idx}",
+                        label_visibility="collapsed",
+                    )
                     if checked:
                         picked_ids.append(it.id)
                 with col_card:
@@ -321,10 +379,31 @@ def main() -> None:
 
             if st.button("将勾选加入 User-List ✅", type="primary", disabled=not picked_ids):
                 have = {x.id for x in session.user_list}
+                newly_added = []
                 for it in session.show_list:
                     if it.id in picked_ids and it.id not in have:
                         session.user_list.append(it)
                         have.add(it.id)
+                        newly_added.append(it)
+                if newly_added:
+                    selected_lines = []
+                    for it in newly_added:
+                        dims = it.dimensions
+                        style_text = "、".join(it.style_tags) if it.style_tags else "—"
+                        selected_lines.append(
+                            f"- {it.name or it.id}（id={it.id}, category={it.category.value}, "
+                            f"price=¥{it.price:,.0f}, style_tags={style_text}, "
+                            f"material={it.material or '—'}, "
+                            f"dimensions={dims.w:.0f}×{dims.d:.0f}×{dims.h:.0f} cm）"
+                        )
+                    st.session_state.lc_messages.append(
+                        HumanMessage(
+                            content=(
+                                "用户刚刚确认并加入了以下家具到 User-List（决策池）\n"
+                                + "\n".join(selected_lines)
+                            )
+                        )
+                    )
                 session.clear_show_list()
                 st.rerun()
 
@@ -353,7 +432,7 @@ def main() -> None:
             elif not st.session_state.render_uploads:
                 st.caption("请先在对话区上传至少 1 张房间或参考图片。")
             elif not DEFAULT_ARK_IMAGE_API_KEY:
-                st.caption("请先在环境变量中配置 `ARK_API_KEY`，才能在 Finish 后进入图生图阶段。")
+                st.caption("请先在环境变量中配置 `ARK_API_KEY`，才能在 Finish 后进入效果图生成阶段。")
 
             if st.button("确认清单完成（Finish）", type="secondary", disabled=finish_disabled):
                 session.workflow_phase = "finished"
@@ -369,7 +448,7 @@ def main() -> None:
                         st.session_state.generated_room_image_error = f"{type(e).__name__}: {e}"
                         msg = (
                             "已记录：你确认了当前决策池清单。后续将不再向候选池写入推荐。"
-                            f"\n\n图生图失败：{type(e).__name__}: {e}"
+                            f"\n\n效果图生成失败：{type(e).__name__}: {e}"
                         )
                 st.session_state.ui_chat_log.append(("assistant", msg))
                 st.rerun()
@@ -393,7 +472,7 @@ def main() -> None:
                 st.rerun()
 
         st.divider()
-        st.subheader("图生图结果")
+        st.subheader("效果图生成结果")
         if st.session_state.generated_room_image_url:
             st.image(st.session_state.generated_room_image_url, width="stretch")
             st.caption("已使用上传照片与 User-List 家具图生成。")
