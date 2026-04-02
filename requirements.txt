@@ -1,0 +1,26 @@
+# LLM / 编排（按需安装其一或组合）
+langchain-core>=0.3.66,<1.0
+langchain-openai>=0.2.14,<0.4
+langchain-chroma>=0.2.0
+
+# Streamlit 原型 UI
+streamlit>=1.40.0
+
+# 数据处理
+modelscope
+
+# API 服务
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+pydantic>=2.0.0
+
+# 其他依赖（配置文件）
+addict
+datasets
+torch
+Pillow
+simplejson
+sortedcontainers
+
+# 前端
+streamlit

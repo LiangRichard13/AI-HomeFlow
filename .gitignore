@@ -41,3 +41,7 @@ npm-debug.log*
 # Vector / local DB (if added later)
 chroma_data/
 *.sqlite3
+
+# Model
+*.bin
+*.safetensors

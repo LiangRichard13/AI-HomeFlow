@@ -2,7 +2,7 @@
 
 **AI-HomeFlow** 是一款基于多智能体（Multi-Agent）技术的智能家居选购与视觉预览系统。它通过独创的“双列表（Show-List & User-List）动态交互范式”，解决了 AI 在长链路装修决策中容易产生的“上下文幻觉”和“需求变更难”等痛点，为用户提供从预算控制到意向图生成的全流程体验。
 
-------
+---
 
 ## 🚀 核心架构：双列表动态交互逻辑
 
@@ -18,57 +18,64 @@
 1. **硬性规则过滤**：基于价格区间、尺寸边界、家具类型进行 SQL/API 级别检索。
 2. **语义重排 (RAG)**：利用 OpenAI/HuggingFace Embedding 对家具描述进行向量匹配，精准捕捉用户如“温馨”、“工业感”等模糊偏好。
 
-------
-
-## 🧩 智能体角色定义 (Agent Roles)
-
-系统由四个专门的智能体协同工作：
-
-- **需求分析师 (Consultant)**：负责意图识别，通过共情对话挖掘用户潜在喜好，维护用户画像。
-- **采购管家 (Purchaser)**：负责对接家具库 API，执行向量检索，管理 `Show-List` 的生成。
-- **审计员 (Auditor)**：实时监控 `User-List`，进行预算超支预警及空间占用逻辑校验。
-- **视觉表现师 (Visualizer)**：将 `User-List` 中的家具素材与用户房型图通过 ControlNet + IP-Adapter 技术合成意向效果图。
-
-------
+---
 
 ## 📊 数据 Schema (模拟验证用)
 
 系统采用以下标准字段进行逻辑验证与向量检索：
 
-| **字段**      | **类型** | **说明**                                      |
-| ------------- | -------- | --------------------------------------------- |
-| `id`          | String   | 家具唯一 ID                                   |
-| `category`    | Enum     | 家具类型 (sofa, table, bed, etc.)             |
-| `price`       | Float    | 单价                                          |
-| `dimensions`  | Object   | 物理尺寸 `{"w": 200, "d": 90, "h": 85}`       |
-| `description` | Text     | 详细描述（用于向量 Embedding 检索的关键字段） |
-| `style_tags`  | List     | 风格标签 (Nordic, Minimalist, etc.)           |
-| `image_url`   | String   | 家具静态图片资源地址                          |
 
-------
+| **字段**        | **类型** | **说明**                              |
+| ------------- | ------ | ----------------------------------- |
+| `id`          | String | 家具唯一 ID                             |
+| `category`    | Enum   | 家具类型 (sofa, table, bed, etc.)       |
+| `price`       | Float  | 单价                                  |
+| `dimensions`  | Object | 物理尺寸 `{"w": 200, "d": 90, "h": 85}` |
+| `description` | Text   | 详细描述（用于向量 Embedding 检索的关键字段）        |
+| `style_tags`  | List   | 风格标签 (Nordic, Minimalist, etc.)     |
+| `image_url`   | String | 家具静态图片资源地址                          |
 
-## 🛠️ 技术栈建议
 
-- **LLM 框架**: CrewAI / LangGraph (支持状态机管理)
-- **向量数据库**: Pinecone / Milvus / Chroma
-- **推理模型**: GPT-4o / Claude 3.5 Sonnet
-- **图像生成**: Stable Diffusion (ComfyUI API) + ControlNet + IP-Adapter
-- **前端展示**: React / Next.js (用于展示瀑布流 `Show-List` 与对比清单)
-
-------
+---
 
 ## 📝 运行流程 (Workflow)
 
-1. **Init**: 用户上传房型图，输入初始预算与风格偏好。
+1. **Init**: 用户上传房型图（可选），输入风格偏好等；决策池金额以已选家具单价之和为准。
 2. **Loop**:
-   - Agent 填充 `Show-List`。
-   - 用户勾选家具进入 `User-List`。
-   - 系统自动更新剩余预算，清空 `Show-List`，进入下一轮（如：选完沙发选茶几）。
+  - 用户和 Agent 描述需求，Agent 进行查找推荐。
+  - Agent 填充 `Show-List`。
+  - 用户勾选家具进入 `User-List`。
+  - 界面展示决策池总价 `sum(User-List.price)`，清空 `Show-List`，进入下一轮（如：选完沙发选茶几）。
 3. **Finish**: 用户确认 `User-List` 完整清单。
 4. **Visualize**: 触发视觉 Agent，生成基于房型结构的样板间意向图。
 
-------
+---
+
+## 🖥️ Streamlit 原型（Agent + 双列表）
+
+依赖安装（含 `streamlit`、`langchain-openai`）：
+
+```bash
+cd backend
+pip install -r requirements.txt
+```
+
+环境变量（可选，亦可在应用侧栏填写 API Key）：
+
+- `OPENAI_API_KEY`：OpenAI 或兼容服务的密钥。
+- `OPENAI_BASE_URL`：可选；侧栏「Base URL」会覆盖并传入客户端。
+
+在**仓库根目录**启动：
+
+```bash
+streamlit run frontend/app.py
+```
+
+说明：原型通过 `backend/agent/runner.py` 加载 `backend/agent/tools/SKILL.md` 作为系统提示，并直接调用家具检索工具；首次对话会触发 GTE/Chroma 预热（与 FastAPI 同源逻辑）。**不必同时启动** `backend/main.py` 的 Uvicorn 即可试用对话与双列表。
+
+---
 
 ## ⚠️ 免责声明
 
 > 本系统生成的图片仅作为**布局意向参考**，不代表 1:1 的物理还原。家具尺寸、光影及摆放比例以最终采购清单及实际测量为准。
+
