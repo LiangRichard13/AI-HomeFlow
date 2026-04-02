@@ -2,22 +2,34 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import re
+from pathlib import Path
 from typing import List, Tuple
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_openai import ChatOpenAI
+from openai import OpenAI
 from pydantic import ValidationError
 
+from agent.config import (
+    DEFAULT_ARK_IMAGE_API_KEY,
+    DEFAULT_ARK_IMAGE_BASE_URL,
+    DEFAULT_ARK_IMAGE_MODEL,
+    DEFAULT_ARK_IMAGE_PROMPT,
+    DEFAULT_CHAT_API_KEY,
+    DEFAULT_CHAT_BASE_URL,
+    DEFAULT_CHAT_MODEL,
+    DEFAULT_MAX_TOOL_ROUNDS,
+    SUPPORTED_ARK_IMAGE_FORMATS,
+)
 from agent.skill_loader import build_system_prompt
 from agent.tools.tool_list import build_tools
 from core.state import SessionState
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_MAX_TOOL_ROUNDS = 8
 
 _XML_INVOKE_RE = re.compile(r"<invoke\s+name=\"([^\"]+)\">(.*?)</invoke>", re.DOTALL)
 _XML_PARAM_RE = re.compile(r"<parameter\s+name=\"([^\"]+)\">(.*?)</parameter>", re.DOTALL)
@@ -46,13 +58,177 @@ def _strip_xml_tool_calls(content: str) -> str:
     return cleaned.strip()
 
 
+def _dedupe_image_refs(image_refs: List[str]) -> List[str]:
+    """去重并清理空字符串，保持原始顺序。"""
+    cleaned: List[str] = []
+    seen: set[str] = set()
+    for ref in image_refs:
+        value = ref.strip()
+        if not value or value in seen:
+            continue
+        cleaned.append(value)
+        seen.add(value)
+    return cleaned
+
+
+def _encode_local_image_as_data_uri(path: Path) -> str:
+    """将本地图片编码为符合 Ark 文档要求的 data URI。"""
+    ext = path.suffix.lower()
+    image_format = SUPPORTED_ARK_IMAGE_FORMATS.get(ext)
+    if not image_format:
+        supported = ", ".join(sorted({fmt for fmt in SUPPORTED_ARK_IMAGE_FORMATS.values()}))
+        raise ValueError(
+            f"不支持的图片格式: {path.suffix or '（无扩展名）'}。"
+            f"当前仅支持: {supported}。"
+        )
+
+    encoded = base64.b64encode(path.read_bytes()).decode("utf-8")
+    return f"data:image/{image_format};base64,{encoded}"
+
+
+def _resolve_local_image_path(image_ref: str) -> Path | None:
+    """解析本地图片路径，兼容绝对路径和相对于 backend/ 的资源路径。"""
+    path = Path(image_ref)
+    if path.is_file():
+        return path
+
+    backend_relative = Path(__file__).resolve().parents[1] / image_ref
+    if backend_relative.is_file():
+        return backend_relative
+
+    return None
+
+
+def _normalize_image_input(image_ref: str) -> str:
+    """
+    归一化图片输入：
+    - http/https/data URL：原样透传
+    - 本地文件路径：读取后转为 data:image/<格式>;base64,<编码>
+    - 其他字符串：原样透传，便于兼容调用方预先传入完整 data URI
+    """
+    value = image_ref.strip()
+    if not value:
+        return ""
+
+    lowered = value.lower()
+    if lowered.startswith(("http://", "https://", "data:")):
+        return value
+
+    path = _resolve_local_image_path(value)
+    if path is not None:
+        return _encode_local_image_as_data_uri(path)
+
+    return value
+
+
+def build_image_to_image_inputs(
+    session: SessionState,
+    *,
+    uploaded_image_urls: List[str] | None = None,
+    room_image_url: str | None = None,
+) -> List[str]:
+    """
+    汇总多图生图输入。
+
+    顺序约定：
+    1. 房间图（优先显式传入 room_image_url，否则回退到 session.room_image_url）
+    2. User-List 中家具图
+    3. 本轮用户额外上传的图片
+    """
+    image_refs: List[str] = []
+
+    room_ref = (room_image_url or session.room_image_url or "").strip()
+    if room_ref:
+        image_refs.append(room_ref)
+
+    for item in session.user_list:
+        item_ref = (item.image_url or "").strip()
+        if item_ref:
+            image_refs.append(item_ref)
+
+    for uploaded in uploaded_image_urls or []:
+        if isinstance(uploaded, str):
+            image_refs.append(uploaded)
+
+    return _dedupe_image_refs(image_refs)
+
+
+def generate_room_image_from_multiple_inputs(
+    session: SessionState,
+    *,
+    api_key: str | None = None,
+    uploaded_image_urls: List[str] | None = None,
+    room_image_url: str | None = None,
+    base_url: str = DEFAULT_ARK_IMAGE_BASE_URL,
+    model: str = DEFAULT_ARK_IMAGE_MODEL,
+    size: str = "2K",
+    response_format: str = "url",
+    watermark: bool = True,
+    sequential_image_generation: str = "disabled",
+) -> dict:
+    """
+    调用 Ark 多图生图接口，将房间图、已选家具图和用户上传图合成为一张效果图。
+
+    返回:
+        {
+            "image_url": str,
+            "input_images": list[str],
+            "model": str,
+            "prompt": str,
+        }
+    """
+    effective_api_key = (api_key or DEFAULT_ARK_IMAGE_API_KEY).strip()
+    if not effective_api_key:
+        raise ValueError("缺少 Ark API Key。")
+
+    image_refs = build_image_to_image_inputs(
+        session,
+        uploaded_image_urls=uploaded_image_urls,
+        room_image_url=room_image_url,
+    )
+    if len(image_refs) < 2:
+        raise ValueError(
+            "至少需要 2 张图片才能进行多图生图：通常应包含 1 张房间图，以及至少 1 张家具图或用户上传图。"
+        )
+    normalized_images = [_normalize_image_input(ref) for ref in image_refs]
+
+    client = OpenAI(
+        base_url=base_url,
+        api_key=effective_api_key,
+    )
+    response = client.images.generate(
+        model=model,
+        prompt=DEFAULT_ARK_IMAGE_PROMPT,
+        size=size,
+        response_format=response_format,
+        extra_body={
+            "image": normalized_images,
+            "watermark": watermark,
+            "sequential_image_generation": sequential_image_generation,
+        },
+    )
+
+    data = getattr(response, "data", None) or []
+    first = data[0] if data else None
+    image_url = getattr(first, "url", None)
+    if not image_url:
+        raise ValueError("图片生成成功返回，但未拿到结果图片 URL。")
+
+    return {
+        "image_url": image_url,
+        "input_images": image_refs,
+        "model": model,
+        "prompt": DEFAULT_ARK_IMAGE_PROMPT,
+    }
+
+
 def run_chat_turn(
     session: SessionState,
     prior_messages: List[BaseMessage],
     user_text: str,
     *,
-    api_key: str,
-    model: str,
+    api_key: str | None = None,
+    model: str | None = None,
     base_url: str | None = None,
     max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS,
 ) -> Tuple[str, List[BaseMessage]]:
@@ -72,10 +248,14 @@ def run_chat_turn(
         HumanMessage(content=user_text),
     ]
 
+    effective_api_key = (api_key or DEFAULT_CHAT_API_KEY).strip()
+    if not effective_api_key:
+        raise ValueError("缺少对话模型 API Key，请在环境变量 OPENAI_API_KEY 中配置。")
+
     llm = ChatOpenAI(
-        model=model,
-        api_key=api_key,
-        base_url=base_url or None,
+        model=(model or DEFAULT_CHAT_MODEL).strip(),
+        api_key=effective_api_key,
+        base_url=base_url if base_url is not None else DEFAULT_CHAT_BASE_URL,
         temperature=0.2,
     ).bind_tools(tools)
 
