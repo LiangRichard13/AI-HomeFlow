@@ -13,6 +13,7 @@ class SessionState(BaseModel):
     show_list: List[FurnitureItem] = Field(default_factory=list)
     user_list: List[FurnitureItem] = Field(default_factory=list)
     room_image_url: Optional[str] = None
+    room_style_analysis: Optional[str] = None
     style_preference: Optional[str] = None
     workflow_phase: Literal["browsing", "finished"] = Field(
         default="browsing",

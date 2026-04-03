@@ -39,7 +39,7 @@ _SHOW_LIST_ADD_TOOL_DESCRIPTION = (
     "在用户已选定要向界面「候选池 / Show-List」展示的一组家具时使用；"
     "须在拿到可信的家具 id 后调用（通常来自同一会话中 furniture_search 的返回字段 `id`，勿编造 id）。"
     "按 furniture_ids 的顺序将尚未在 Show-List 中的条目追加进去；已存在的 id 会跳过。"
-    "recommendation_reason_markdown 应用 Markdown 写清为何推荐这几件（可与用户问题逐点对应），便于你生成最终回复。"
+    "本工具只负责写入候选池，不负责承载大段推荐理由；推荐说明应写在你给用户的正常回复正文里。"
 )
 
 # 与下方 Field、openai_tool_schemas 共用，避免两处文案漂移
@@ -60,10 +60,6 @@ P_SHOW_LIST_IDS = (
     "必填。家具 id 字符串列表，须与目录中一致（如 fur_001、fur_019）。"
     "通常直接使用最近一次 furniture_search 返回中每条记录的 `id` 字段；顺序表示展示优先级。"
     "勿使用名称或模糊描述代替 id。"
-)
-P_SHOW_LIST_REASON = (
-    "必填。Markdown 文本，面向用户解释为何推荐上述 id；"
-    "建议分条对应每件家具或按场景/预算/风格组织，勿留空。"
 )
 
 
@@ -102,11 +98,8 @@ def build_tools(session: SessionState):
     @tool(description=_SHOW_LIST_ADD_TOOL_DESCRIPTION)
     def show_list_add(
         furniture_ids: Annotated[List[str], Field(description=P_SHOW_LIST_IDS, min_length=1)],
-        recommendation_reason_markdown: Annotated[
-            str, Field(description=P_SHOW_LIST_REASON, min_length=1)
-        ],
     ) -> str:
-        """写入 Show-List 并返回 JSON 报告（added / unknown_ids / show_list_size / 理由回显）。有实际新增时先清空候选池再写入。"""
+        """写入 Show-List 并返回 JSON 报告（added / unknown_ids / show_list_size）。有实际新增时先清空候选池再写入。"""
         valid_new: List[str] = []
         missing: List[str] = []
         existing_ids = {x.id for x in session.show_list}
@@ -129,7 +122,6 @@ def build_tools(session: SessionState):
             "added_furniture_ids": added,
             "unknown_ids": missing,
             "show_list_size": len(session.show_list),
-            "recommendation_reason_markdown": recommendation_reason_markdown,
         }
         return json.dumps(report, ensure_ascii=False)
 
@@ -187,13 +179,8 @@ def openai_tool_schemas() -> List[FurnitureSearchOpenAIFunction]:
                             "minItems": 1,
                             "description": P_SHOW_LIST_IDS,
                         },
-                        "recommendation_reason_markdown": {
-                            "type": "string",
-                            "minLength": 1,
-                            "description": P_SHOW_LIST_REASON,
-                        },
                     },
-                    "required": ["furniture_ids", "recommendation_reason_markdown"],
+                    "required": ["furniture_ids"],
                 },
             },
         },

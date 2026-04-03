@@ -25,6 +25,8 @@ def format_session_digest(session: SessionState) -> str:
     lines = [
         f"- workflow_phase: {session.workflow_phase}",
         f"- style_preference: {session.style_preference or '（未设置）'}",
+        f"- room_image_url: {session.room_image_url or '（未设置）'}",
+        f"- room_style_analysis: {session.room_style_analysis or '（未分析）'}",
         f"- 决策池家具件数: {len(session.user_list)}",
         f"- 决策池总价 user_list_total: {session.user_list_total:.2f} 元",
     ]

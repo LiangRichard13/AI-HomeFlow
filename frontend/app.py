@@ -43,6 +43,7 @@ from agent.config import (
     DEFAULT_CHAT_MODEL,
 )
 from agent.runner import (
+    analyze_room_image_for_context,
     generate_room_image_from_multiple_inputs,
     run_chat_turn,
 )
@@ -108,6 +109,20 @@ def _init_session_state() -> None:
         st.session_state.generated_room_image_error = None
     if "generated_room_image_inputs" not in st.session_state:
         st.session_state.generated_room_image_inputs: list[str] = []
+    if "render_room_analysis_room_id" not in st.session_state:
+        st.session_state.render_room_analysis_room_id = None
+    if "render_room_analysis_text" not in st.session_state:
+        st.session_state.render_room_analysis_text = None
+    if "render_room_analysis_error" not in st.session_state:
+        st.session_state.render_room_analysis_error = None
+
+
+def _clear_room_understanding(session: SessionState) -> None:
+    session.room_image_url = None
+    session.room_style_analysis = None
+    st.session_state.render_room_analysis_room_id = None
+    st.session_state.render_room_analysis_text = None
+    st.session_state.render_room_analysis_error = None
 
 
 def _upload_cache_dir() -> Path:
@@ -146,6 +161,47 @@ def _sync_render_uploads(uploaded_files) -> None:
         st.session_state.generated_room_image_url = None
         st.session_state.generated_room_image_error = None
         st.session_state.generated_room_image_inputs = []
+        st.session_state.render_room_analysis_room_id = None
+        st.session_state.render_room_analysis_text = None
+        st.session_state.render_room_analysis_error = None
+
+
+def _ensure_room_understanding(session: SessionState) -> None:
+    uploads = st.session_state.render_uploads
+    room_id = st.session_state.render_room_image_id
+    room_entry = next((item for item in uploads if item["id"] == room_id), None)
+    if room_entry is None:
+        _clear_room_understanding(session)
+        return
+
+    session.room_image_url = room_entry["path"]
+    cached_room_id = st.session_state.render_room_analysis_room_id
+    cached_text = st.session_state.render_room_analysis_text
+    cached_error = st.session_state.render_room_analysis_error
+    if cached_room_id == room_id and (cached_text or cached_error):
+        session.room_style_analysis = cached_text
+        return
+    if not DEFAULT_ARK_IMAGE_API_KEY:
+        _clear_room_understanding(session)
+        return
+
+    with st.spinner("正在理解房间图片风格…"):
+        try:
+            result = analyze_room_image_for_context(
+                session,
+                image_ref=room_entry["path"],
+                api_key=DEFAULT_ARK_IMAGE_API_KEY,
+                base_url=DEFAULT_ARK_IMAGE_BASE_URL,
+            )
+        except Exception as e:
+            st.session_state.render_room_analysis_room_id = room_id
+            st.session_state.render_room_analysis_text = None
+            st.session_state.render_room_analysis_error = f"{type(e).__name__}: {e}"
+            session.room_style_analysis = None
+        else:
+            st.session_state.render_room_analysis_room_id = room_id
+            st.session_state.render_room_analysis_text = result["analysis"]
+            st.session_state.render_room_analysis_error = None
 
 
 def _run_image_generation(
@@ -175,6 +231,19 @@ def _run_image_generation(
     st.session_state.generated_room_image_error = None
     st.session_state.generated_room_image_inputs = result["input_images"]
     return result["image_url"]
+
+
+def _furniture_context_line(it) -> str:
+    """将家具条目格式化为可写入上下文的单行摘要。"""
+    cat = it.category.value if hasattr(it.category, "value") else it.category
+    dims = it.dimensions
+    style_text = "、".join(it.style_tags) if it.style_tags else "—"
+    return (
+        f"- {it.name or it.id}（id={it.id}, category={cat}, "
+        f"price=¥{it.price:,.0f}, style_tags={style_text}, "
+        f"material={it.material or '—'}, "
+        f"dimensions={dims.w:.0f}×{dims.d:.0f}×{dims.h:.0f} cm）"
+    )
 
 
 def _render_show_item(it, idx: int) -> None:
@@ -245,6 +314,9 @@ def main() -> None:
             st.session_state.ui_chat_log = []
             st.session_state.render_uploads = []
             st.session_state.render_room_image_id = None
+            st.session_state.render_room_analysis_room_id = None
+            st.session_state.render_room_analysis_text = None
+            st.session_state.render_room_analysis_error = None
             st.session_state.generated_room_image_url = None
             st.session_state.generated_room_image_error = None
             st.session_state.generated_room_image_inputs = []
@@ -267,90 +339,107 @@ def main() -> None:
     col_chat, col_lists = st.columns([1.1, 0.9], gap="large")
 
     with col_chat:
-        st.subheader("对话与上传")
-        uploaded_files = st.file_uploader(
-            "上传房间/参考图片",
-            type=SUPPORTED_UPLOAD_TYPES,
-            accept_multiple_files=True,
-            help="建议至少上传 1 张房间照片；这些图片会在确认清单完成后与 User-List 家具图一起用于效果图生成。",
-        )
-        _sync_render_uploads(uploaded_files)
-
-        if st.session_state.render_uploads:
-            room_options = [item["id"] for item in st.session_state.render_uploads]
-            selected_room_id = st.selectbox(
-                "选择房间照片",
-                options=room_options,
-                index=room_options.index(st.session_state.render_room_image_id)
-                if st.session_state.render_room_image_id in room_options
-                else 0,
-                format_func=lambda item_id: next(
-                    item["name"] for item in st.session_state.render_uploads if item["id"] == item_id
-                ),
+        st.subheader("对话")
+        with st.expander("上传房间/参考图片", expanded=bool(st.session_state.render_uploads)):
+            uploaded_files = st.file_uploader(
+                "上传房间/参考图片",
+                type=SUPPORTED_UPLOAD_TYPES,
+                accept_multiple_files=True,
+                help="建议至少上传 1 张房间照片；这些图片会在确认清单完成后与 User-List 家具图一起用于效果图生成。",
             )
-            st.session_state.render_room_image_id = selected_room_id
+            _sync_render_uploads(uploaded_files)
 
-            preview_cols = st.columns(min(4, len(st.session_state.render_uploads)))
-            for idx, item in enumerate(st.session_state.render_uploads):
-                with preview_cols[idx % len(preview_cols)]:
-                    img = _resolve_image(item["path"])
-                    if img:
-                        st.image(img, width=110)
-                    tag = "房间图" if item["id"] == st.session_state.render_room_image_id else "参考图"
-                    st.caption(f"{tag} · {item['name']}")
-        else:
-            st.caption("可在此提前上传房间图或参考图，系统会缓存到 Finish 阶段再调用效果图生成。")
+            if st.session_state.render_uploads:
+                room_options = [item["id"] for item in st.session_state.render_uploads]
+                selected_room_id = st.selectbox(
+                    "选择房间照片",
+                    options=room_options,
+                    index=room_options.index(st.session_state.render_room_image_id)
+                    if st.session_state.render_room_image_id in room_options
+                    else 0,
+                    format_func=lambda item_id: next(
+                        item["name"] for item in st.session_state.render_uploads if item["id"] == item_id
+                    ),
+                )
+                st.session_state.render_room_image_id = selected_room_id
+                _ensure_room_understanding(session)
 
+                preview_cols = st.columns(min(4, len(st.session_state.render_uploads)))
+                for idx, item in enumerate(st.session_state.render_uploads):
+                    with preview_cols[idx % len(preview_cols)]:
+                        img = _resolve_image(item["path"])
+                        if img:
+                            st.image(img, width=110)
+                        tag = "房间图" if item["id"] == st.session_state.render_room_image_id else "参考图"
+                        st.caption(f"{tag} · {item['name']}")
+
+                st.markdown("**房间多模态理解**")
+                if st.session_state.render_room_analysis_text:
+                    st.markdown(st.session_state.render_room_analysis_text)
+                    st.caption("该结果已自动加入主 Agent 上下文，用于后续推荐。")
+                elif st.session_state.render_room_analysis_error:
+                    st.warning(f"房间理解失败：{st.session_state.render_room_analysis_error}")
+                elif not DEFAULT_ARK_IMAGE_API_KEY:
+                    st.caption("未配置 `ARK_API_KEY`，暂不进行房间风格理解。")
+                else:
+                    st.caption("已选定房间图，等待自动生成房间风格分析。")
+            else:
+                _clear_room_understanding(session)
+                st.caption("可在此提前上传房间图或参考图，系统会缓存到 Finish 阶段再调用效果图生成。")
+
+        chat_container_slot = st.empty()
+        status_slot = st.empty()
         user_input = st.chat_input(
             "描述需求，Agent 检索后将推荐追加到候选池",
             disabled=session.workflow_phase == "finished",
         )
         if session.workflow_phase == "finished":
-            st.caption("已确认清单完成；对话已关闭。可在侧栏重置会话。")
+            status_slot.caption("已确认清单完成；对话已关闭。可在侧栏重置会话。")
 
         if user_input and DEFAULT_CHAT_API_KEY:
             st.session_state.ui_chat_log.append(("user", user_input))
 
-        chat_container = st.container(height=800, border=True)
-        with chat_container:
-            if not st.session_state.ui_chat_log:
-                st.caption("在下方输入需求，Agent 会把合适的家具加入候选池。")
-            for role, text in st.session_state.ui_chat_log:
-                with st.chat_message(role):
-                    st.markdown(text)
+        with chat_container_slot.container():
+            chat_container = st.container(height=760, border=True)
+            with chat_container:
+                if not st.session_state.ui_chat_log:
+                    st.caption("在下方输入需求，Agent 会把合适的家具加入候选池。")
+                for role, text in st.session_state.ui_chat_log:
+                    with st.chat_message(role):
+                        st.markdown(text)
 
-            if user_input and DEFAULT_CHAT_API_KEY:
-                tail_to_extend: list[BaseMessage] = []
-                reply = ""
-                with st.chat_message("assistant"):
-                    stream_ph = st.empty()
-                    buf = ""
+                if user_input and DEFAULT_CHAT_API_KEY:
+                    tail_to_extend: list[BaseMessage] = []
+                    reply = ""
+                    with st.chat_message("assistant"):
+                        stream_ph = st.empty()
+                        buf = ""
 
-                    def _on_stream(kind: str, data) -> None:
-                        nonlocal buf
-                        if kind == "delta":
-                            buf += data
-                            stream_ph.markdown(buf)
-                        elif kind == "status":
-                            buf += f"\n\n*{data}*\n\n"
-                            stream_ph.markdown(buf)
+                        def _on_stream(kind: str, data) -> None:
+                            nonlocal buf
+                            if kind == "delta":
+                                buf += data
+                                stream_ph.markdown(buf)
+                            elif kind == "status":
+                                buf += f"\n\n*{data}*\n\n"
+                                stream_ph.markdown(buf)
 
-                    try:
-                        reply, tail_to_extend = run_chat_turn(
-                            session,
-                            list(st.session_state.lc_messages),
-                            user_input,
-                            stream=True,
-                            on_stream_event=_on_stream,
-                        )
-                    except Exception as e:
-                        reply = f"调用失败：{type(e).__name__}: {e}"
-                        stream_ph.markdown(reply)
-                    else:
-                        stream_ph.markdown(reply or buf or "（无文本回复）")
-                    st.session_state.lc_messages.extend(tail_to_extend)
-                st.session_state.ui_chat_log.append(("assistant", reply or buf or "（无文本回复）"))
-                st.rerun()
+                        try:
+                            reply, tail_to_extend = run_chat_turn(
+                                session,
+                                list(st.session_state.lc_messages),
+                                user_input,
+                                stream=True,
+                                on_stream_event=_on_stream,
+                            )
+                        except Exception as e:
+                            reply = f"调用失败：{type(e).__name__}: {e}"
+                            stream_ph.markdown(reply)
+                        else:
+                            stream_ph.markdown(reply or buf or "（无文本回复）")
+                        st.session_state.lc_messages.extend(tail_to_extend)
+                    st.session_state.ui_chat_log.append(("assistant", reply or buf or "（无文本回复）"))
+                    st.rerun()
 
         if user_input and not DEFAULT_CHAT_API_KEY:
             st.warning("请先在环境变量中配置 `OPENAI_API_KEY`。")
@@ -377,7 +466,13 @@ def main() -> None:
                 with col_card:
                     _render_show_item(it, idx)
 
-            if st.button("将勾选加入 User-List ✅", type="primary", disabled=not picked_ids):
+            action_col_add, action_col_clear = st.columns(2)
+            with action_col_add:
+                add_to_user_list = st.button("将勾选加入 User-List ✅", type="primary", disabled=not picked_ids)
+            with action_col_clear:
+                clear_show_list = st.button("都不喜欢，换一批 ↻", type="secondary")
+
+            if add_to_user_list:
                 have = {x.id for x in session.user_list}
                 newly_added = []
                 for it in session.show_list:
@@ -386,16 +481,7 @@ def main() -> None:
                         have.add(it.id)
                         newly_added.append(it)
                 if newly_added:
-                    selected_lines = []
-                    for it in newly_added:
-                        dims = it.dimensions
-                        style_text = "、".join(it.style_tags) if it.style_tags else "—"
-                        selected_lines.append(
-                            f"- {it.name or it.id}（id={it.id}, category={it.category.value}, "
-                            f"price=¥{it.price:,.0f}, style_tags={style_text}, "
-                            f"material={it.material or '—'}, "
-                            f"dimensions={dims.w:.0f}×{dims.d:.0f}×{dims.h:.0f} cm）"
-                        )
+                    selected_lines = [_furniture_context_line(it) for it in newly_added]
                     st.session_state.lc_messages.append(
                         HumanMessage(
                             content=(
@@ -405,6 +491,40 @@ def main() -> None:
                         )
                     )
                 session.clear_show_list()
+                st.rerun()
+
+            if clear_show_list:
+                rejected_batch = list(session.show_list)
+                rejected_lines = [_furniture_context_line(it) for it in rejected_batch]
+                session.clear_show_list()
+                st.session_state.lc_messages.append(
+                    HumanMessage(
+                        content=(
+                            "用户刚刚清空了当前 Show-List，并明确表示这批候选都不喜欢，希望你换一批继续推荐。\n"
+                            "请把下列候选视为刚被用户否决的一批；除非用户后续明确要求回看，否则避免再次推荐相同 id：\n"
+                            + "\n".join(rejected_lines)
+                        )
+                    )
+                )
+                visible_user_text = "这批我都不喜欢，换一批。"
+                st.session_state.ui_chat_log.append(("user", visible_user_text))
+                if DEFAULT_CHAT_API_KEY:
+                    with st.spinner("正在调整并重新推荐下一批候选…"):
+                        try:
+                            reply, tail_to_extend = run_chat_turn(
+                                session,
+                                list(st.session_state.lc_messages),
+                                visible_user_text,
+                            )
+                        except Exception as e:
+                            reply = f"调用失败：{type(e).__name__}: {e}"
+                            tail_to_extend = []
+                    st.session_state.lc_messages.extend(tail_to_extend)
+                    st.session_state.ui_chat_log.append(("assistant", reply or "（无文本回复）"))
+                else:
+                    st.session_state.ui_chat_log.append(
+                        ("assistant", "已清空候选池。请先配置 `OPENAI_API_KEY`，再继续让 Agent 推荐下一批。")
+                    )
                 st.rerun()
 
         st.divider()

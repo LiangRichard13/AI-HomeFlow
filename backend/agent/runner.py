@@ -27,6 +27,9 @@ from agent.config import (
     DEFAULT_ARK_IMAGE_BASE_URL,
     DEFAULT_ARK_IMAGE_MODEL,
     DEFAULT_ARK_IMAGE_PROMPT,
+    DEFAULT_ARK_ROOM_UNDERSTANDING_PROMPT,
+    DEFAULT_ARK_VISION_MAX_TOKENS,
+    DEFAULT_ARK_VISION_MODEL,
     DEFAULT_CHAT_API_KEY,
     DEFAULT_CHAT_BASE_URL,
     DEFAULT_CHAT_MODEL,
@@ -262,6 +265,84 @@ def build_image_to_image_inputs(
     return _dedupe_image_refs(image_refs)
 
 
+def _extract_chat_completion_text(response: Any) -> str:
+    """从 OpenAI 兼容 chat completion 响应中提取文本。"""
+    choices = getattr(response, "choices", None) or []
+    first = choices[0] if choices else None
+    message = getattr(first, "message", None)
+    content = getattr(message, "content", "") if message is not None else ""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(str(block.get("text", "")))
+            else:
+                parts.append(str(block))
+        return "".join(parts).strip()
+    return str(content).strip() if content else ""
+
+
+def analyze_room_image_for_context(
+    session: SessionState,
+    *,
+    image_ref: str,
+    api_key: str | None = None,
+    base_url: str = DEFAULT_ARK_IMAGE_BASE_URL,
+    model: str = DEFAULT_ARK_VISION_MODEL,
+    prompt: str = DEFAULT_ARK_ROOM_UNDERSTANDING_PROMPT,
+    max_tokens: int = DEFAULT_ARK_VISION_MAX_TOKENS,
+) -> dict:
+    """
+    调用 Ark 多模态模型理解房间图片，并将结果写入会话上下文。
+
+    返回:
+        {
+            "analysis": str,
+            "image_ref": str,
+            "model": str,
+            "prompt": str,
+        }
+    """
+    effective_api_key = (api_key or DEFAULT_ARK_IMAGE_API_KEY).strip()
+    if not effective_api_key:
+        raise ValueError("缺少 Ark API Key。")
+    if not image_ref.strip():
+        raise ValueError("缺少待分析的房间图片。")
+
+    normalized_image = _normalize_image_input(image_ref)
+    client = OpenAI(
+        base_url=base_url,
+        api_key=effective_api_key,
+    )
+    response = client.chat.completions.create(
+        model=model,
+        max_tokens=max_tokens,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": normalized_image}},
+                ],
+            }
+        ],
+    )
+    analysis = _extract_chat_completion_text(response)
+    if not analysis:
+        raise ValueError("房间多模态理解成功返回，但未拿到可用文本结果。")
+
+    session.room_image_url = image_ref
+    session.room_style_analysis = analysis
+    return {
+        "analysis": analysis,
+        "image_ref": image_ref,
+        "model": model,
+        "prompt": prompt,
+    }
+
+
 def generate_room_image_from_multiple_inputs(
     session: SessionState,
     *,
@@ -387,7 +468,7 @@ def run_chat_turn(
         style_preference=session.style_preference,
     )
 
-    last_recommendation_text: str | None = None
+    last_show_list_report: dict[str, Any] | None = None
     visible_response_parts: list[str] = []
     use_stream = bool(stream and on_stream_event is not None)
 
@@ -511,13 +592,12 @@ def run_chat_turn(
                 output=out,
             )
 
-            # 从 show_list_add 结果中提取推荐理由备用
+            # 记录 show_list_add 结果，供极端情况下没有正文回复时做简短兜底
             if name == "show_list_add":
                 try:
                     report = json.loads(out)
-                    reason = report.get("recommendation_reason_markdown", "")
-                    if reason:
-                        last_recommendation_text = reason
+                    if isinstance(report, dict):
+                        last_show_list_report = report
                 except (json.JSONDecodeError, AttributeError):
                     pass
 
@@ -531,10 +611,15 @@ def run_chat_turn(
     else:
         final_text = ""
 
-    # 若最终文本为空（MiniMax 在 XML 工具调用后不再生成文本），
-    # 使用 show_list_add 传入的 recommendation_reason_markdown 作为回复
-    if not final_text and last_recommendation_text:
-        final_text = last_recommendation_text
+    # 若最终文本为空（如某些模型在 XML 工具调用后不再生成正文），
+    # 用简短的候选池更新结果做兜底，避免前端拿到空 response_content
+    if not final_text and last_show_list_report:
+        added_ids = last_show_list_report.get("added_furniture_ids") or []
+        unknown_ids = last_show_list_report.get("unknown_ids") or []
+        if added_ids:
+            final_text = f"已更新候选池，共加入 {len(added_ids)} 件家具。"
+        elif unknown_ids:
+            final_text = "候选池更新时发现部分家具 id 无效，请重新检索后再试。"
     if final_text and not visible_response_parts:
         visible_response_parts.append(final_text)
 
