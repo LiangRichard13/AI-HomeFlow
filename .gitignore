@@ -27,6 +27,7 @@ build/
 *.swp
 .DS_Store
 Thumbs.db
+.cursor/
 
 # Logs & debug
 *.log
