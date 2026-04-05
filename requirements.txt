@@ -1,20 +1,20 @@
-# LLM / 编排（按需安装其一或组合）
+# LLM / orchestration (install one or more as needed)
 langchain-core>=0.3.66,<1.0
 langchain-openai>=0.2.14,<0.4
 langchain-chroma>=0.2.0
 
-# Streamlit 原型 UI
+# Streamlit prototype UI
 streamlit>=1.40.0
 
-# 模型管理
+# Model hub
 modelscope
 
-# API 服务
+# API server
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
 pydantic>=2.0.0
 
-# 其他依赖（配置文件）
+# Other deps (config files)
 addict
 datasets
 torch

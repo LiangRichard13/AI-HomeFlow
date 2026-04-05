@@ -12,6 +12,11 @@ import os
 import sys
 from pathlib import Path
 
+# 从任意工作目录直接运行本脚本时，将 backend 加入 path，以便 import rag.*
+_BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
+
 # 避免误用 GPU（ModelScope 部分 pipeline 默认 gpu）
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 

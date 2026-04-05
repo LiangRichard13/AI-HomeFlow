@@ -11,17 +11,15 @@ DEFAULT_MAX_TOOL_ROUNDS = 8
 
 # Chat / Agent 配置
 DEFAULT_CHAT_API_KEY = (os.getenv("CHAT_API_KEY") or "").strip()
-# DEFAULT_CHAT_BASE_URL = "https://api.siliconflow.cn/v1"
-# DEFAULT_CHAT_MODEL = "Pro/MiniMaxAI/MiniMax-M2.5"
-DEFAULT_CHAT_BASE_URL = "https://api.deepseek.com"
-DEFAULT_CHAT_MODEL = "deepseek-chat"
+DEFAULT_CHAT_BASE_URL = "https://api.siliconflow.cn/v1"
+DEFAULT_CHAT_MODEL = "Pro/MiniMaxAI/MiniMax-M2.5"
+# DEFAULT_CHAT_BASE_URL = "https://api.deepseek.com"
+# DEFAULT_CHAT_MODEL = "deepseek-chat"
 
 # 图生图配置
 DEFAULT_ARK_IMAGE_API_KEY = (os.getenv("ARK_API_KEY") or "").strip()
 DEFAULT_ARK_IMAGE_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
 DEFAULT_ARK_IMAGE_MODEL = "doubao-seedream-5-0-260128"
-DEFAULT_ARK_VISION_MODEL = "doubao-seed-2-0-mini-260215"
-DEFAULT_ARK_VISION_MAX_TOKENS = 400
 SUPPORTED_ARK_IMAGE_FORMATS = {
     ".jpg": "jpeg",
     ".jpeg": "jpeg",
@@ -55,6 +53,9 @@ DEFAULT_ARK_IMAGE_PROMPT = """请你根据房间照片，将提供的家具添�
 ● 该房间的装修应该和提供的家具图片相协调
 """
 
+# 房间风格理解
+DEFAULT_ARK_VISION_MODEL = "doubao-seed-2-0-mini-260215"
+DEFAULT_ARK_VISION_MAX_TOKENS = 400
 DEFAULT_ARK_ROOM_UNDERSTANDING_PROMPT = """你是室内空间分析助手。请基于用户上传的房间照片，输出适合家具推荐系统使用的中文分析。
 
 要求：
