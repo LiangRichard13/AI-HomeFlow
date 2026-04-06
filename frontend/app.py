@@ -168,9 +168,9 @@ def _persist_uploaded_file(uploaded_file) -> dict:
     }
 
 
-def _sync_render_uploads(uploaded_files) -> None:
+def _sync_render_uploads(uploaded_file) -> None:
     previous_ids = [item["id"] for item in st.session_state.render_uploads]
-    current = [_persist_uploaded_file(file) for file in uploaded_files or []]
+    current = [_persist_uploaded_file(uploaded_file)] if uploaded_file else []
     current_ids = [item["id"] for item in current]
     st.session_state.render_uploads = current
 
@@ -225,8 +225,7 @@ def _ensure_upload_analyses() -> None:
     if not missing_entries:
         return
 
-    label = "正在理解新上传的图片…" if len(missing_entries) == 1 else "正在理解新上传的多张图片…"
-    with st.spinner(label):
+    with st.spinner("正在理解上传的房间图片…"):
         for item in missing_entries:
             st.session_state.render_room_analysis_cache[item["id"]] = _analyze_upload_once(item)
 
@@ -261,21 +260,20 @@ def _run_image_generation(
 ) -> str:
     uploads = st.session_state.render_uploads
     if not uploads:
-        raise ValueError("请先上传至少 1 张房间或参考图片。")
+        raise ValueError("请先上传 1 张房间图片。")
     if not session.user_list:
         raise ValueError("请先将至少 1 件家具加入 User-List，再进入效果图生成阶段。")
 
     room_id = st.session_state.render_room_image_id
     room_entry = next((item for item in uploads if item["id"] == room_id), None)
     if room_entry is None:
-        raise ValueError("请从上传图片中选择 1 张作为房间照片。")
+        raise ValueError("请先上传 1 张房间图片。")
 
-    extra_refs = [item["path"] for item in uploads if item["id"] != room_id]
     result = generate_room_image_from_multiple_inputs(
         session=session,
         api_key=DEFAULT_ARK_IMAGE_API_KEY,
         room_image_url=room_entry["path"],
-        uploaded_image_urls=extra_refs,
+        uploaded_image_urls=[],
         base_url=DEFAULT_ARK_IMAGE_BASE_URL,
         model=DEFAULT_ARK_IMAGE_MODEL,
     )
@@ -418,39 +416,22 @@ def main() -> None:
 
     with col_chat:
         st.subheader("对话")
-        with st.expander("上传房间/参考图片", expanded=bool(st.session_state.render_uploads)):
-            uploaded_files = st.file_uploader(
-                "上传房间/参考图片",
+        with st.expander("上传房间图片", expanded=bool(st.session_state.render_uploads)):
+            uploaded_file = st.file_uploader(
+                "上传房间图片",
                 type=SUPPORTED_UPLOAD_TYPES,
-                accept_multiple_files=True,
+                accept_multiple_files=False,
                 key=_upload_widget_key(),
-                help="建议至少上传 1 张房间照片；这些图片会在确认清单完成后与 User-List 家具图一起用于效果图生成。",
+                help="请上传 1 张房间照片；系统会在确认清单完成后结合 User-List 家具图生成效果图。",
             )
-            _sync_render_uploads(uploaded_files)
+            _sync_render_uploads(uploaded_file)
 
             if st.session_state.render_uploads:
                 _ensure_upload_analyses()
-                room_options = [item["id"] for item in st.session_state.render_uploads]
-                if st.session_state.render_room_image_id not in room_options:
-                    st.session_state.render_room_image_id = room_options[0]
-                st.selectbox(
-                    "选择房间照片",
-                    options=room_options,
-                    key="render_room_image_id",
-                    format_func=lambda item_id: next(
-                        item["name"] for item in st.session_state.render_uploads if item["id"] == item_id
-                    ),
-                )
+                st.session_state.render_room_image_id = st.session_state.render_uploads[0]["id"]
                 _apply_selected_room_understanding(session)
 
-                selected_room_entry = next(
-                    (
-                        item
-                        for item in st.session_state.render_uploads
-                        if item["id"] == st.session_state.render_room_image_id
-                    ),
-                    None,
-                )
+                selected_room_entry = st.session_state.render_uploads[0]
                 if selected_room_entry:
                     img = _resolve_image(selected_room_entry["path"])
                     if img:
@@ -469,7 +450,7 @@ def main() -> None:
                     st.caption("已选定房间图，等待自动生成房间风格分析。")
             else:
                 _clear_room_understanding(session, clear_cache=True)
-                st.caption("可在此提前上传房间图或参考图，系统会缓存到 Finish 阶段再调用效果图生成。")
+                st.caption("可在此提前上传房间图，系统会缓存到 Finish 阶段再调用效果图生成。")
 
         chat_container_slot = st.empty()
         status_slot = st.empty()
@@ -627,7 +608,7 @@ def main() -> None:
             if not session.user_list:
                 st.caption("请先把至少 1 件家具加入 User-List。")
             elif not st.session_state.render_uploads:
-                st.caption("请先在对话区上传至少 1 张房间或参考图片。")
+                st.caption("请先在对话区上传 1 张房间图片。")
             elif not DEFAULT_ARK_IMAGE_API_KEY:
                 st.caption("请先在环境变量中配置 `ARK_API_KEY`，才能在 Finish 后进入效果图生成阶段。")
 

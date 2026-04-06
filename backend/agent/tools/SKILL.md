@@ -47,7 +47,7 @@ Guides the AI-HomeFlow furniture assistant role, tools (furniture_search,show_li
 - [ ] 1a. 若有 `room_style_analysis`：提炼其中的风格、色彩、材质、氛围与空间限制，作为辅助推荐依据
 - [ ] 2. 若缺主类目：先向用户确认，或在上下文足够明确时推断唯一主类目
 - [ ] 3. 调用 furniture_search：必填 category；按需填写价格/尺寸；需要语义优选时填写 description
-- [ ] 4. 阅读返回 JSON：记录可信的 id、价格、尺寸、描述亮点与限制
+- [ ] 4. 阅读返回 JSON：记录可信的 id、价格、尺寸、描述亮点与限制，并同时执行5和6
 - [ ] 5. 选定要推进候选池的 id 列表（顺序即展示优先级）
 - [ ] 6. 调用 show_list_add(furniture_ids)
 - [ ] 7. 用口语化方式向用户解释：为什么推荐、适合什么场景、接下来还能如何继续缩小范围
